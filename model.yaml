@@ -1,0 +1,8 @@
+learning_rate: 0.001
+adv_learning_rate: 0.001
+adv_grad_factor: 1.0
+activation: tanh
+n_common_layers: 3
+n_common_units: 10
+n_adv_layers: 3
+n_adv_units: 5
