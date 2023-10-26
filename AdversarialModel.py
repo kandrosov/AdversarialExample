@@ -75,7 +75,7 @@ class AdversarialModel(keras.Model):
     ones = tf.ones_like(y)
     zeros = tf.zeros_like(y)
     w_class = tf.where((y == 0) | (y == 1), ones, zeros)
-    w_adv = tf.where((y == 0) | (y == 1), ones, zeros)
+    w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
     y_class = tf.where((y == 0) | (y == 2), zeros, ones)
     y_adv = tf.where((y == 0), ones, zeros)
 
@@ -191,12 +191,12 @@ if __name__ == "__main__":
   shutil.copy(args.cfg, dirFile)
   shutil.copy('AdversarialModel.py', dirFile)
 
-  dirFile = os.path.join(dirFile, 'model')
+  modelDirFile = os.path.join(dirFile, 'model')
   print(dirFile)
 
 
   callbacks = [
-    ModelCheckpoint(dirFile, verbose=1, monitor="val_class_loss", mode='min', min_rel_delta=1e-3,
+    ModelCheckpoint(modelDirFile, verbose=1, monitor="val_class_loss", mode='min', min_rel_delta=1e-3,
                     patience=args.patience, save_callback=None),
     tf.keras.callbacks.CSVLogger(os.path.join(dirFile, 'training_log.csv'), append=True),
   ]
