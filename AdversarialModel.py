@@ -151,6 +151,7 @@ if __name__ == "__main__":
   parser.add_argument('--n-epochs', required=False, type=int, default=10000)
   parser.add_argument('--dataset-train', required=False, default='data/train', type=str)
   parser.add_argument('--dataset-val', required=False, default='data/val', type=str)
+  parser.add_argument('--adv-grad-factor', required=False, type=float, default=None)
 
   parser.add_argument('--summary-only', required=False, action='store_true')
   args = parser.parse_args()
@@ -160,6 +161,8 @@ if __name__ == "__main__":
 
   with open(args.cfg) as f:
     cfg = yaml.safe_load(f)
+  if args.adv_grad_factor is not None:
+    cfg['adv_grad_factor'] = args.adv_grad_factor
 
   model = AdversarialModel(cfg)
   model.compile(loss=keras.losses.BinaryCrossentropy(from_logits=False),

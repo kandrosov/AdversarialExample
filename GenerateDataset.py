@@ -22,11 +22,11 @@ if __name__ == "__main__":
   data[:N, 1] = np.random.normal(loc=0., scale=1., size=N)
   data[:N, 2] = np.random.normal(loc=0., scale=1., size=N)
   data[N:2*N, 0] = 1
-  data[N:2*N, 1] = np.random.normal(loc=0.5, scale=1., size=N)
-  data[N:2*N, 2] = np.random.normal(loc=0.5, scale=1., size=N)
+  data[N:2*N, 1] = np.random.normal(loc=1, scale=1., size=N)
+  data[N:2*N, 2] = np.random.normal(loc=2, scale=1., size=N)
   data[2*N:3*N, 0] = 2
   data[2*N:3*N, 1] = np.random.normal(loc=0., scale=1., size=N)
-  data[2*N:3*N, 2] = np.random.normal(loc=0.5, scale=1., size=N)
+  data[2*N:3*N, 2] = np.random.normal(loc=2, scale=1., size=N)
 
   np.random.shuffle(data)
 
