@@ -21,22 +21,33 @@ from tensorflow import keras
 from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras.callbacks import CSVLogger
 
+@tf.function
+def binary_entropy(target, output):
+  epsilon = tf.constant(1e-7, dtype=tf.float32)
+  x = tf.clip_by_value(output, epsilon, 1 - epsilon)
+  return - target * tf.math.log(x) - (1 - target) * tf.math.log(1 - x)
+
+@tf.function
+def accuracy(target, output, weights):
+  x = tf.cast(tf.equal(target, tf.round(output)), tf.float32)
+  return tf.reduce_sum(tf.multiply(x, weights))
+
 class AdversarialModel(keras.Model):
   '''Goal: discriminate class0 vs class1 without learning features that can discriminate class0 vs class2'''
 
   def __init__(self, setup, *args, **kwargs):
     super().__init__(*args, **kwargs)
 
-    self.class_loss = keras.losses.BinaryCrossentropy(from_logits=False)
-    self.adv_loss = keras.losses.BinaryCrossentropy(from_logits=False)
+    self.class_loss = binary_entropy
+    self.adv_loss = binary_entropy
 
     self.adv_optimizer = tf.keras.optimizers.AdamW(learning_rate=setup['adv_learning_rate'])
     self.adv_grad_factor = setup['adv_grad_factor']
 
     self.class_loss_tracker = keras.metrics.Mean(name="class_loss")
     self.adv_loss_tracker = keras.metrics.Mean(name="adv_loss")
-    self.class_accuracy = tf.keras.metrics.BinaryAccuracy(name="class_accuracy")
-    self.adv_accuracy = tf.keras.metrics.BinaryAccuracy(name="adv_accuracy")
+    self.class_accuracy = keras.metrics.Mean(name="class_accuracy")
+    self.adv_accuracy = keras.metrics.Mean(name="adv_accuracy")
 
     self.common_layers = []
 
@@ -76,13 +87,19 @@ class AdversarialModel(keras.Model):
     zeros = tf.zeros_like(y)
     w_class = tf.where((y == 0) | (y == 1), ones, zeros)
     w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
-    y_class = tf.where((y == 0) | (y == 2), zeros, ones)
-    y_adv = tf.where((y == 0), ones, zeros)
+    y_class = tf.where((y == 0), zeros, ones)
+    y_adv = tf.where(y == 0, ones, zeros)
+
+    n_class = tf.reduce_sum(tf.where((y == 0) | (y == 1), ones, zeros))
+    n_adv = tf.reduce_sum(tf.where((y == 0) | (y == 2), ones, zeros))
 
     with tf.GradientTape() as class_tape, tf.GradientTape() as adv_tape:
       y_pred_class, y_pred_adv = self(x, training=True)
+      y_pred_class = tf.reshape(y_pred_class, tf.shape(y_class))
+      y_pred_adv = tf.reshape(y_pred_adv, tf.shape(y_adv))
       class_loss_vec = self.class_loss(y_class, y_pred_class)
       class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
+
       adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
       adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
 
@@ -100,10 +117,13 @@ class AdversarialModel(keras.Model):
     self.optimizer.apply_gradients(zip(grad_common + grad_class_excl, common_vars + class_vars))
     self.adv_optimizer.apply_gradients(zip(grad_adv_excl, adv_vars))
 
+    class_accuracy = accuracy(y_class, y_pred_class, w_class) / n_class
+    adv_accuracy = accuracy(y_adv, y_pred_adv, w_adv) / n_adv
+
     self.class_loss_tracker.update_state(class_loss)
     self.adv_loss_tracker.update_state(adv_loss)
-    self.class_accuracy.update_state(y_class, y_pred_class, sample_weight=w_class)
-    self.adv_accuracy.update_state(y_adv, y_pred_adv, sample_weight=w_adv)
+    self.class_accuracy.update_state(class_accuracy)
+    self.adv_accuracy.update_state(adv_accuracy)
 
     return { m.name: m.result() for m in self.metrics }
 
@@ -113,20 +133,29 @@ class AdversarialModel(keras.Model):
     ones = tf.ones_like(y)
     zeros = tf.zeros_like(y)
     w_class = tf.where((y == 0) | (y == 1), ones, zeros)
-    w_adv = tf.where((y == 0) | (y == 1), ones, zeros)
-    y_class = tf.where((y == 0) | (y == 2), zeros, ones)
+    w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
+    y_class = tf.where(y == 0, zeros, ones)
     y_adv = tf.where((y == 0), ones, zeros)
 
+    n_class = tf.reduce_sum(tf.where((y == 0) | (y == 1), ones, zeros))
+    n_adv = tf.reduce_sum(tf.where((y == 0) | (y == 2), ones, zeros))
+
     y_pred_class, y_pred_adv = self(x, training=False)
+    y_pred_class = tf.reshape(y_pred_class, tf.shape(y_class))
+    y_pred_adv = tf.reshape(y_pred_adv, tf.shape(y_adv))
+
     class_loss_vec = self.class_loss(y_class, y_pred_class)
     class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
     adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
     adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
 
+    class_accuracy = accuracy(y_class, y_pred_class, w_class) / n_class
+    adv_accuracy = accuracy(y_adv, y_pred_adv, w_adv) / n_adv
+
     self.class_loss_tracker.update_state(class_loss)
     self.adv_loss_tracker.update_state(adv_loss)
-    self.class_accuracy.update_state(y_class, y_pred_class, sample_weight=w_class)
-    self.adv_accuracy.update_state(y_adv, y_pred_adv, sample_weight=w_adv)
+    self.class_accuracy.update_state(class_accuracy)
+    self.adv_accuracy.update_state(adv_accuracy)
 
     return { m.name: m.result() for m in self.metrics }
 
@@ -165,7 +194,7 @@ if __name__ == "__main__":
     cfg['adv_grad_factor'] = args.adv_grad_factor
 
   model = AdversarialModel(cfg)
-  model.compile(loss=keras.losses.BinaryCrossentropy(from_logits=False),
+  model.compile(loss=None,
                 optimizer=tf.keras.optimizers.AdamW(learning_rate=cfg['learning_rate']))
 
   dataset_train = tf.data.Dataset.load(args.dataset_train, compression='GZIP')
