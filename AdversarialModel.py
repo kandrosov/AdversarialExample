@@ -80,54 +80,7 @@ class AdversarialModel(keras.Model):
     adv_output = self.adv_output(x)
     return class_output, adv_output
 
-  def train_step(self, data):
-    x, y = data
-
-    ones = tf.ones_like(y)
-    zeros = tf.zeros_like(y)
-    w_class = tf.where((y == 0) | (y == 1), ones, zeros)
-    w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
-    y_class = tf.where((y == 0), zeros, ones)
-    y_adv = tf.where(y == 0, ones, zeros)
-
-    n_class = tf.reduce_sum(tf.where((y == 0) | (y == 1), ones, zeros))
-    n_adv = tf.reduce_sum(tf.where((y == 0) | (y == 2), ones, zeros))
-
-    with tf.GradientTape() as class_tape, tf.GradientTape() as adv_tape:
-      y_pred_class, y_pred_adv = self(x, training=True)
-      y_pred_class = tf.reshape(y_pred_class, tf.shape(y_class))
-      y_pred_adv = tf.reshape(y_pred_adv, tf.shape(y_adv))
-      class_loss_vec = self.class_loss(y_class, y_pred_class)
-      class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
-
-      adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
-      adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
-
-    common_vars = [ var for var in self.trainable_variables if "/common" in var.name ]
-    class_vars = [ var for var in self.trainable_variables if "/class" in var.name ]
-    adv_vars = [ var for var in self.trainable_variables if "/adv" in var.name ]
-    n_common_vars = len(common_vars)
-
-    grad_class = class_tape.gradient(class_loss, common_vars + class_vars)
-    grad_adv = adv_tape.gradient(adv_loss, common_vars + adv_vars)
-    grad_class_excl = grad_class[n_common_vars:]
-    grad_adv_excl = grad_adv[n_common_vars:]
-    grad_common = [ grad_class[i] - self.adv_grad_factor * grad_adv[i] for i in range(len(common_vars)) ]
-
-    self.optimizer.apply_gradients(zip(grad_common + grad_class_excl, common_vars + class_vars))
-    self.adv_optimizer.apply_gradients(zip(grad_adv_excl, adv_vars))
-
-    class_accuracy = accuracy(y_class, y_pred_class, w_class) / n_class
-    adv_accuracy = accuracy(y_adv, y_pred_adv, w_adv) / n_adv
-
-    self.class_loss_tracker.update_state(class_loss)
-    self.adv_loss_tracker.update_state(adv_loss)
-    self.class_accuracy.update_state(class_accuracy)
-    self.adv_accuracy.update_state(adv_accuracy)
-
-    return { m.name: m.result() for m in self.metrics }
-
-  def test_step(self, data):
+  def _step(self, data, training):
     x, y = data
 
     ones = tf.ones_like(y)
@@ -135,19 +88,26 @@ class AdversarialModel(keras.Model):
     w_class = tf.where((y == 0) | (y == 1), ones, zeros)
     w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
     y_class = tf.where(y == 0, zeros, ones)
-    y_adv = tf.where((y == 0), ones, zeros)
+    y_adv = tf.where(y == 0, ones, zeros)
 
     n_class = tf.reduce_sum(tf.where((y == 0) | (y == 1), ones, zeros))
     n_adv = tf.reduce_sum(tf.where((y == 0) | (y == 2), ones, zeros))
 
-    y_pred_class, y_pred_adv = self(x, training=False)
-    y_pred_class = tf.reshape(y_pred_class, tf.shape(y_class))
-    y_pred_adv = tf.reshape(y_pred_adv, tf.shape(y_adv))
+    def compute_losses():
+      y_pred_class, y_pred_adv = self(x, training=training)
+      y_pred_class = tf.reshape(y_pred_class, tf.shape(y_class))
+      y_pred_adv = tf.reshape(y_pred_adv, tf.shape(y_adv))
+      class_loss_vec = self.class_loss(y_class, y_pred_class)
+      class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
+      adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
+      adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
+      return y_pred_class, y_pred_adv, class_loss, adv_loss
 
-    class_loss_vec = self.class_loss(y_class, y_pred_class)
-    class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
-    adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
-    adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
+    if training:
+      with tf.GradientTape() as class_tape, tf.GradientTape() as adv_tape:
+        y_pred_class, y_pred_adv, class_loss, adv_loss = compute_losses()
+    else:
+      y_pred_class, y_pred_adv, class_loss, adv_loss = compute_losses()
 
     class_accuracy = accuracy(y_class, y_pred_class, w_class) / n_class
     adv_accuracy = accuracy(y_adv, y_pred_adv, w_adv) / n_adv
@@ -157,7 +117,31 @@ class AdversarialModel(keras.Model):
     self.class_accuracy.update_state(class_accuracy)
     self.adv_accuracy.update_state(adv_accuracy)
 
+    if training:
+      common_vars = [ var for var in self.trainable_variables if "/common" in var.name ]
+      class_vars = [ var for var in self.trainable_variables if "/class" in var.name ]
+      adv_vars = [ var for var in self.trainable_variables if "/adv" in var.name ]
+      n_common_vars = len(common_vars)
+
+      grad_class = class_tape.gradient(class_loss, common_vars + class_vars)
+      grad_adv = adv_tape.gradient(adv_loss, common_vars + adv_vars)
+      grad_class_excl = grad_class[n_common_vars:]
+      grad_adv_excl = grad_adv[n_common_vars:]
+      adv_factor = self.adv_grad_factor * tf.math.minimum(10*tf.abs(0.5 - adv_accuracy), 1.)
+      # adv_factor = self.adv_grad_factor
+      grad_common = [ grad_class[i] - adv_factor * grad_adv[i] for i in range(len(common_vars)) ]
+
+      self.optimizer.apply_gradients(zip(grad_common + grad_class_excl, common_vars + class_vars))
+      self.adv_optimizer.apply_gradients(zip(grad_adv_excl, adv_vars))
+
+
     return { m.name: m.result() for m in self.metrics }
+
+  def train_step(self, data):
+    return self._step(data, training=True)
+
+  def test_step(self, data):
+    return self._step(data, training=False)
 
   @property
   def metrics(self):
