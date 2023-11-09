@@ -28,9 +28,8 @@ def binary_entropy(target, output):
   return - target * tf.math.log(x) - (1 - target) * tf.math.log(1 - x)
 
 @tf.function
-def accuracy(target, output, weights):
-  x = tf.cast(tf.equal(target, tf.round(output)), tf.float32)
-  return tf.reduce_sum(tf.multiply(x, weights))
+def accuracy(target, output):
+  return tf.cast(tf.equal(target, tf.round(output)), tf.float32)
 
 class AdversarialModel(keras.Model):
   '''Goal: discriminate class0 vs class1 without learning features that can discriminate class0 vs class2'''
@@ -87,11 +86,8 @@ class AdversarialModel(keras.Model):
     zeros = tf.zeros_like(y)
     w_class = tf.where((y == 0) | (y == 1), ones, zeros)
     w_adv = tf.where((y == 0) | (y == 2), ones, zeros)
-    y_class = tf.where(y == 0, zeros, ones)
+    y_class = tf.where(y == 0 , zeros, ones)
     y_adv = tf.where(y == 0, ones, zeros)
-
-    n_class = tf.reduce_sum(tf.where((y == 0) | (y == 1), ones, zeros))
-    n_adv = tf.reduce_sum(tf.where((y == 0) | (y == 2), ones, zeros))
 
     def compute_losses():
       y_pred_class, y_pred_adv = self(x, training=training)
@@ -101,21 +97,22 @@ class AdversarialModel(keras.Model):
       class_loss = tf.reduce_mean(tf.multiply(class_loss_vec, w_class))
       adv_loss_vec = self.adv_loss(y_adv, y_pred_adv)
       adv_loss = tf.reduce_mean(tf.multiply(adv_loss_vec, w_adv))
-      return y_pred_class, y_pred_adv, class_loss, adv_loss
+      return y_pred_class, y_pred_adv, class_loss_vec, class_loss, adv_loss_vec, adv_loss
 
     if training:
       with tf.GradientTape() as class_tape, tf.GradientTape() as adv_tape:
-        y_pred_class, y_pred_adv, class_loss, adv_loss = compute_losses()
+        y_pred_class, y_pred_adv, class_loss_vec, class_loss, adv_loss_vec, adv_loss = compute_losses()
     else:
-      y_pred_class, y_pred_adv, class_loss, adv_loss = compute_losses()
+      y_pred_class, y_pred_adv, class_loss_vec, class_loss, adv_loss_vec, adv_loss = compute_losses()
 
-    class_accuracy = accuracy(y_class, y_pred_class, w_class) / n_class
-    adv_accuracy = accuracy(y_adv, y_pred_adv, w_adv) / n_adv
+    class_accuracy_vec = accuracy(y_class, y_pred_class)
+    adv_accuracy_vec = accuracy(y_adv, y_pred_adv)
+    adv_accuracy = tf.reduce_sum(tf.multiply(adv_accuracy_vec, w_adv)) / tf.reduce_sum(w_adv)
 
-    self.class_loss_tracker.update_state(class_loss)
-    self.adv_loss_tracker.update_state(adv_loss)
-    self.class_accuracy.update_state(class_accuracy)
-    self.adv_accuracy.update_state(adv_accuracy)
+    self.class_loss_tracker.update_state(class_loss_vec, sample_weight=w_class)
+    self.adv_loss_tracker.update_state(adv_loss_vec, sample_weight=w_adv)
+    self.class_accuracy.update_state(class_accuracy_vec, sample_weight=w_class)
+    self.adv_accuracy.update_state(adv_accuracy_vec, sample_weight=w_adv)
 
     if training:
       common_vars = [ var for var in self.trainable_variables if "/common" in var.name ]
@@ -127,7 +124,7 @@ class AdversarialModel(keras.Model):
       grad_adv = adv_tape.gradient(adv_loss, common_vars + adv_vars)
       grad_class_excl = grad_class[n_common_vars:]
       grad_adv_excl = grad_adv[n_common_vars:]
-      adv_factor = self.adv_grad_factor * tf.math.minimum(10*tf.abs(0.5 - adv_accuracy), 1.)
+      adv_factor = self.adv_grad_factor * tf.math.minimum(100*tf.abs(0.5 - adv_accuracy), 1.)
       # adv_factor = self.adv_grad_factor
       grad_common = [ grad_class[i] - adv_factor * grad_adv[i] for i in range(len(common_vars)) ]
 
@@ -151,6 +148,9 @@ class AdversarialModel(keras.Model):
           self.class_accuracy,
           self.adv_accuracy,
     ]
+
+def save_predicate(model, logs):
+  return abs(logs['val_adv_accuracy'] - 0.5) < 0.01
 
 if __name__ == "__main__":
   import argparse
@@ -213,7 +213,7 @@ if __name__ == "__main__":
 
   callbacks = [
     ModelCheckpoint(modelDirFile, verbose=1, monitor="val_class_loss", mode='min', min_rel_delta=1e-3,
-                    patience=args.patience, save_callback=None),
+                    patience=args.patience, save_callback=None, predicate=save_predicate),
     tf.keras.callbacks.CSVLogger(os.path.join(dirFile, 'training_log.csv'), append=True),
   ]
 

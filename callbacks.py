@@ -5,7 +5,7 @@ import os
 
 class ModelCheckpoint(keras.callbacks.Callback):
   def __init__(self, filepath, monitor="val_loss", verbose=0, mode="min", min_delta=None, min_rel_delta=None,
-               save_callback=None, patience=None):
+               save_callback=None, patience=None, predicate=None):
     super().__init__()
     self.monitor = monitor
     self.verbose = verbose
@@ -14,6 +14,7 @@ class ModelCheckpoint(keras.callbacks.Callback):
     self.msg = None
     self.save_callback = save_callback
     self.patience = patience
+    self.predicate = predicate
 
     if os.path.exists(filepath):
       shutil.rmtree(filepath)
@@ -55,7 +56,7 @@ class ModelCheckpoint(keras.callbacks.Callback):
   def on_epoch_end(self, epoch, logs=None):
     self.epochs_since_last_save += 1
     current = logs.get(self.monitor)
-    if self.monitor_op(current, self.best):
+    if self.monitor_op(current, self.best) and (self.predicate is None or self.predicate(self.model, logs)):
       dir_name = f'epoch_{epoch+1}'
       path = os.path.join(self.filepath, dir_name)
       if self.save_callback is None:
