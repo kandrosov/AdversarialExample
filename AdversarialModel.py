@@ -18,7 +18,7 @@ from .callbacks import ModelCheckpoint
 
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
 from tensorflow.keras.callbacks import CSVLogger
 
 @tf.function
@@ -40,7 +40,8 @@ class AdversarialModel(keras.Model):
     self.class_loss = binary_entropy
     self.adv_loss = binary_entropy
 
-    self.adv_optimizer = tf.keras.optimizers.AdamW(learning_rate=setup['adv_learning_rate'])
+    self.adv_optimizer = tf.keras.optimizers.AdamW(learning_rate=setup['adv_learning_rate'],
+                                                   weight_decay=setup['adv_weight_decay'])
     self.adv_grad_factor = setup['adv_grad_factor']
     self.class_grad_factor = setup['class_grad_factor']
 
@@ -51,23 +52,24 @@ class AdversarialModel(keras.Model):
 
     self.common_layers = []
 
+    def add_layer(layer_list, n_units, activation, name):
+      layer = Dense(n_units, activation=activation, name=name)
+      layer_list.append(layer)
+      if setup['dropout'] > 0:
+        dropout = Dropout(setup['dropout'], name=name + '_dropout')
+        layer_list.append(dropout)
+      if setup['use_batch_norm']:
+        batch_norm = BatchNormalization(name=name + '_batch_norm')
+        layer_list.append(batch_norm)
+
     for n in range(setup['n_common_layers']):
-      layer = Dense(setup['n_common_units'], activation=setup['activation'], name=f'common_{n}')
-      self.common_layers.append(layer)
-      dropout = keras.layers.Dropout(setup['dropout'], name=f'common_dropout_{n}')
-      self.common_layers.append(dropout)
+      add_layer(self.common_layers, setup['n_common_units'], setup['activation'], f'common_{n}')
 
     self.class_layers = []
     self.adv_layers = []
     for n in range(setup['n_adv_layers']):
-      layer = Dense(setup['n_adv_units'], activation=setup['activation'], name=f'class_{n}')
-      self.class_layers.append(layer)
-      dropout = keras.layers.Dropout(setup['dropout'], name=f'class_dropout_{n}')
-      self.class_layers.append(dropout)
-      layer = Dense(setup['n_adv_units'], activation=setup['activation'], name=f'adv_{n}')
-      self.adv_layers.append(layer)
-      dropout = keras.layers.Dropout(setup['dropout'], name=f'adv_dropout_{n}')
-      self.adv_layers.append(dropout)
+      add_layer(self.class_layers, setup['n_adv_units'], setup['activation'], f'class_{n}')
+      add_layer(self.adv_layers, setup['n_adv_units'], setup['activation'], f'adv_{n}')
 
     self.class_output = Dense(1, activation='sigmoid', name='class_output')
     self.adv_output = Dense(1, activation='sigmoid', name='adv_output')
@@ -185,7 +187,8 @@ if __name__ == "__main__":
 
   model = AdversarialModel(cfg)
   model.compile(loss=None,
-                optimizer=tf.keras.optimizers.AdamW(learning_rate=cfg['learning_rate']))
+                optimizer=tf.keras.optimizers.AdamW(learning_rate=cfg['learning_rate'],
+                                                    weight_decay=cfg['weight_decay']))
 
   dataset_train = tf.data.Dataset.load(args.dataset_train, compression='GZIP')
   ds_train = dataset_train.batch(args.batch_size)
