@@ -42,6 +42,7 @@ class AdversarialModel(keras.Model):
 
     self.adv_optimizer = tf.keras.optimizers.AdamW(learning_rate=setup['adv_learning_rate'])
     self.adv_grad_factor = setup['adv_grad_factor']
+    self.class_grad_factor = setup['class_grad_factor']
 
     self.class_loss_tracker = keras.metrics.Mean(name="class_loss")
     self.adv_loss_tracker = keras.metrics.Mean(name="adv_loss")
@@ -53,18 +54,23 @@ class AdversarialModel(keras.Model):
     for n in range(setup['n_common_layers']):
       layer = Dense(setup['n_common_units'], activation=setup['activation'], name=f'common_{n}')
       self.common_layers.append(layer)
+      dropout = keras.layers.Dropout(setup['dropout'], name=f'common_dropout_{n}')
+      self.common_layers.append(dropout)
 
     self.class_layers = []
     self.adv_layers = []
     for n in range(setup['n_adv_layers']):
       layer = Dense(setup['n_adv_units'], activation=setup['activation'], name=f'class_{n}')
       self.class_layers.append(layer)
+      dropout = keras.layers.Dropout(setup['dropout'], name=f'class_dropout_{n}')
+      self.class_layers.append(dropout)
       layer = Dense(setup['n_adv_units'], activation=setup['activation'], name=f'adv_{n}')
       self.adv_layers.append(layer)
+      dropout = keras.layers.Dropout(setup['dropout'], name=f'adv_dropout_{n}')
+      self.adv_layers.append(dropout)
 
     self.class_output = Dense(1, activation='sigmoid', name='class_output')
     self.adv_output = Dense(1, activation='sigmoid', name='adv_output')
-
 
   def call(self, x):
     for layer in self.common_layers:
@@ -107,7 +113,6 @@ class AdversarialModel(keras.Model):
 
     class_accuracy_vec = accuracy(y_class, y_pred_class)
     adv_accuracy_vec = accuracy(y_adv, y_pred_adv)
-    adv_accuracy = tf.reduce_sum(tf.multiply(adv_accuracy_vec, w_adv)) / tf.reduce_sum(w_adv)
 
     self.class_loss_tracker.update_state(class_loss_vec, sample_weight=w_class)
     self.adv_loss_tracker.update_state(adv_loss_vec, sample_weight=w_adv)
@@ -124,9 +129,8 @@ class AdversarialModel(keras.Model):
       grad_adv = adv_tape.gradient(adv_loss, common_vars + adv_vars)
       grad_class_excl = grad_class[n_common_vars:]
       grad_adv_excl = grad_adv[n_common_vars:]
-      adv_factor = self.adv_grad_factor * tf.math.minimum(100*tf.abs(0.5 - adv_accuracy), 1.)
-      # adv_factor = self.adv_grad_factor
-      grad_common = [ grad_class[i] - adv_factor * grad_adv[i] for i in range(len(common_vars)) ]
+      grad_common = [ self.class_grad_factor * grad_class[i] - self.adv_grad_factor * grad_adv[i] \
+                      for i in range(len(common_vars)) ]
 
       self.optimizer.apply_gradients(zip(grad_common + grad_class_excl, common_vars + class_vars))
       self.adv_optimizer.apply_gradients(zip(grad_adv_excl, adv_vars))
@@ -165,6 +169,7 @@ if __name__ == "__main__":
   parser.add_argument('--dataset-train', required=False, default='data/train', type=str)
   parser.add_argument('--dataset-val', required=False, default='data/val', type=str)
   parser.add_argument('--adv-grad-factor', required=False, type=float, default=None)
+  parser.add_argument('--class-grad-factor', required=False, type=float, default=None)
 
   parser.add_argument('--summary-only', required=False, action='store_true')
   args = parser.parse_args()
@@ -174,8 +179,9 @@ if __name__ == "__main__":
 
   with open(args.cfg) as f:
     cfg = yaml.safe_load(f)
-  if args.adv_grad_factor is not None:
-    cfg['adv_grad_factor'] = args.adv_grad_factor
+
+  cfg['adv_grad_factor'] = args.adv_grad_factor if args.adv_grad_factor is not None else 0
+  cfg['class_grad_factor'] = args.class_grad_factor if args.class_grad_factor is not None else 1
 
   model = AdversarialModel(cfg)
   model.compile(loss=None,
